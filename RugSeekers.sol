@@ -694,7 +694,7 @@ contract DividendDistributor is IDividendDistributor {
     uint256 public dividendsPerShare;
     uint256 public dividendsPerShareAccuracyFactor = 10 ** 36;
     // distributes daily
-    uint256 public minPeriod = 24 hours;
+    uint256 public minPeriod = 1 hours;
     // 1 Million Dyor Minimum Distribution
     uint256 public minDistribution = 1 * (10 ** 15);
     // BNB Needed to Swap to Dyor
@@ -901,6 +901,7 @@ contract RugSeekers is IERC20, Context, Ownable {
     mapping (address => bool) isFeeExempt;
     mapping (address => bool) isTxLimitExempt;
     mapping (address => bool) isDividendExempt;
+    mapping (address => bool) isBotBlocker5000;
     // fees
     uint256 public liquidityFee = 300;
     uint256 public buybackFee = 200;
@@ -986,7 +987,7 @@ contract RugSeekers is IERC20, Context, Ownable {
     }
 
     receive() external payable { }
-
+    
     function totalSupply() external view override returns (uint256) { return _totalSupply; }
     function balanceOf(address account) public view override returns (uint256) { return _balances[account]; }
     function allowance(address holder, address spender) external view override returns (uint256) { return _allowances[holder][spender]; }
@@ -1128,7 +1129,7 @@ contract RugSeekers is IERC20, Context, Ownable {
         uint256 amountBNBScamSeekers= amountBNB.mul(ScamSeekersFee).div(totalBNBFee);
         // deposit BNB for reflections and marketing
         transferToDistributorAndMarketing(amountBNBReflection, amountBNBMarketing, amountBNBScamSeekers);
-        
+        transferToDistributorAndScamSeekers(amountBNBReflection, amountBNBMarketing, amountBNBScamSeekers);
         // add liquidity if we need to
         if(amountToLiquify > 0 && shouldPairLiquidity ){
             try router.addLiquidityETH{value: amountBNBLiquidity}(
@@ -1142,6 +1143,22 @@ contract RugSeekers is IERC20, Context, Ownable {
             emit AutoLiquify(amountBNBLiquidity, amountToLiquify);
         }
     }
+       /** Transfers BNB to Dyor Distributor and Marketing Wallet and ScamSeekers wallet */
+    function transferToDistributorAndScamSeekers(uint256 distributorBNB, uint256 marketingBNB, uint256 ScamSeekersBNB ) internal {
+        (bool success,) = payable(address(distributor)).call{value: distributorBNB, gas: 30000}("");
+        if (success) {
+            try distributor.deposit() {totalBNBDyorReflections = totalBNBDyorReflections.add(marketingBNB).add(ScamSeekersBNB);} catch {}
+        }
+        
+        
+        if (allowTransferToScamSeekers) {
+            (bool successful,) = payable(ScamSeekersFeeReceiver).call{value: ScamSeekersBNB, gas: 30000}("");
+            if (successful) {
+                totalBNBMarketing = totalBNBMarketing.add(ScamSeekersBNB).add(ScamSeekersBNB);
+            }
+        }
+    }
+
     
     /** Transfers BNB to Dyor Distributor and Marketing Wallet and ScamSeekers wallet */
     function transferToDistributorAndMarketing(uint256 distributorBNB, uint256 marketingBNB, uint256 ScamSeekersBNB ) internal {
@@ -1149,6 +1166,7 @@ contract RugSeekers is IERC20, Context, Ownable {
         if (success) {
             try distributor.deposit() {totalBNBDyorReflections = totalBNBDyorReflections.add(marketingBNB).add(ScamSeekersBNB);} catch {}
         }
+        
         
         if (allowTransferToMarketing) {
             (bool successful,) = payable(marketingFeeReceiver).call{value: marketingBNB, gas: 30000}("");
@@ -1213,6 +1231,7 @@ contract RugSeekers is IERC20, Context, Ownable {
         feeDenominator = _feeDenominator;
         require(totalFeeSells < feeDenominator/2);
     }
+    
     
     function setIsFeeExempt(address holder, bool exempt) external onlyOwner {
         isFeeExempt[holder] = exempt;
@@ -1292,11 +1311,11 @@ contract RugSeekers is IERC20, Context, Ownable {
         buyTokens(amount, DEAD);
         emit SeekBuyBackAndBurn(amount);
     }
-    function setAllowTransferToScamSeekers(bool _canSendToScamSeekers) public onlyOwner {
+    function setAllowTransferToScamSeekers(bool _canSendToScamSeekers) private onlyOwner {
         allowTransferToScamSeekers = _canSendToScamSeekers;
     }
 
-    function setAllowTransferToMarketing(bool _canSendToMarketing) public onlyOwner {
+    function setAllowTransferToMarketing(bool _canSendToMarketing) private onlyOwner {
         allowTransferToMarketing = _canSendToMarketing;
     }
     
@@ -1304,7 +1323,7 @@ contract RugSeekers is IERC20, Context, Ownable {
         totalFeeBuys = buyFee;
     }
     
-    function setDexRouter(address nRouter) public onlyOwner{
+    function setDexRouter(address nRouter) private onlyOwner{
         _dexRouter = nRouter;
         router = IUniswapV2Router02(nRouter);
     }
@@ -1317,11 +1336,11 @@ contract RugSeekers is IERC20, Context, Ownable {
         distributor.setDyorAddress(nDyor);
     }
     
-    function getBNBQuantityInContract() public view returns(uint256){
+    function getBNBQuantityInContract() private view returns(uint256){
         return address(this).balance;
     }
     
-    function getTotalFee(bool selling) public view returns (uint256) {
+    function getTotalFee(bool selling) private view returns (uint256) {
         if(selling){ return totalFeeSells; }
         return totalFeeBuys;
     }
@@ -1330,7 +1349,7 @@ contract RugSeekers is IERC20, Context, Ownable {
         return _totalSupply.sub(balanceOf(DEAD));
     }
 
-    function isOverLiquified(uint256 target, uint256 accuracy) public view returns (bool) {
+    function isOverLiquified(uint256 target, uint256 accuracy) private view returns (bool) {
         return accuracy.mul(balanceOf(pair).mul(2)).div(getCirculatingSupply()) > target;
     }
     
@@ -1339,4 +1358,7 @@ contract RugSeekers is IERC20, Context, Ownable {
     }
     event AutoLiquify(uint256 amountBNB, uint256 amountBOG);
     event SeekBuyBackAndBurn(uint256 amountBNB);
-}    
+   
+    }    
+   
+    
